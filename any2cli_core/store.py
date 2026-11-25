@@ -1,22 +1,24 @@
 """Local, versioned profiles with atomic writes and serialized registry updates."""
 
-import json
 import errno
 import hashlib
+import json
 import os
 import re
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from .catalog import CatalogError, FORMAT, KINDS
 
 
 def bundle_id(value):
-    if value.casefold().endswith(".exe") and re.fullmatch(r'[\w(][\w .()\-]*\.exe', value, re.I):
-        if value.split(".", 1)[0].upper() not in {"CON", "PRN", "AUX", "NUL", *(f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10))}:
-            return value.casefold()
-        raise CatalogError("Reserved Windows device name.")
+    if value.casefold().endswith(".exe"):
+        stem = value[:-4]
+        if (not stem.strip(" .") or re.search(r'[<>:"/\\|?*\x00-\x1f]', stem)
+                or re.fullmatch(r"CON|PRN|AUX|NUL|(?:COM|LPT)[1-9¹²³]", stem.split(".")[0].rstrip(), re.I)):
+            raise CatalogError("Invalid Windows executable filename.")
+        return value.casefold()
     if re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+", value) is None:
         raise CatalogError("Expected an application bundle ID or an executable name ending in .exe.")
     return value
@@ -24,6 +26,8 @@ def bundle_id(value):
 
 def profile_path(value):
     p = Path(value).expanduser()
+    if p.parent == Path(".") and p.suffix.casefold() == ".exe":
+        return Path(".any2cli") / (bundle_id(p.name) + ".json")
     if p.suffix == ".json" or p.is_file() or p.parent != Path("."):
         return p
     return Path(".any2cli") / (bundle_id(value) + ".json")
@@ -75,21 +79,19 @@ class Store:
             else:
                 data = initial
             result = change(data)
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=self.path.parent,
-                                             prefix=".any2cli-", delete=False) as tmp:
-                temporary = Path(tmp.name)
-                try:
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=self.path.parent,
+                                                 prefix=".any2cli-", delete=False) as tmp:
+                    temporary = Path(tmp.name)
                     json.dump(data, tmp, ensure_ascii=False, indent=2, allow_nan=False)
                     tmp.write("\n")
                     tmp.flush()
                     os.fsync(tmp.fileno())
-                except BaseException:
-                    temporary.unlink(missing_ok=True)
-                    raise
-            try:
                 os.replace(temporary, self.path)
             finally:
-                temporary.unlink(missing_ok=True)
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
             return result
 
 
@@ -101,15 +103,11 @@ def live_session(app):
             else f"any2cli-{os.getuid()}-{key}.lock")
     path = Path(tempfile.gettempdir()) / name
     fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "r+b") as lock:
-        guard = exclusive(lock, wait=False)
+    with os.fdopen(fd, "r+b") as lock, ExitStack() as stack:
         try:
-            guard.__enter__()
+            stack.enter_context(exclusive(lock, wait=False))
         except OSError as exc:
             if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
                 raise
             raise CatalogError("Another Any2CLI session is using this application.", status="busy") from exc
-        try:
-            yield
-        finally:
-            guard.__exit__(None, None, None)
+        yield

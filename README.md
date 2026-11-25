@@ -50,7 +50,7 @@ For a live call, omit `--dry-run`. A field accepts text, a choice accepts one of
 | macOS | `./workspace.cli COMMAND --value "VALUE"` |
 | Either platform | `any2cli run workspace.json "OPERATION" --value "VALUE"` |
 
-The Windows launcher uses the installed `any2cli.exe` on `PATH`. Both the launcher and `run` can resolve an uncompiled operation by its ID or unique name, register it, and invoke it in one call. Use `--replay` to check an outcome recorded in the profile. A live call reports `verified_ui` when its postcondition is met, `observed_ui_change` for an unexpected or previously unverified change with no stronger postcondition, and `unverified` when it cannot confirm an effect.
+The Windows launcher uses the installed `any2cli.exe` on `PATH`. Agents passing arbitrary text can call that executable directly with an argument list. Both the launcher and `run` can resolve an uncompiled operation by its ID or unique name, register it, and invoke it in one call. Use `--replay` to check an outcome recorded in the profile. A live call reports `verified_ui` when its postcondition is met, `observed_ui_change` when the UI changes without a more specific postcondition, and `unverified` when it cannot confirm an effect.
 
 ## Desktop backends
 
@@ -62,4 +62,4 @@ Profiles are local JSON files and can contain window titles and control labels. 
 
 ## Development
 
-Run the regression suite with `python -m unittest discover -s tests -v`. The Windows integration test opens a temporary WPF window in the test session and exercises it through the public CLI. Any2CLI is distributed under the [MIT license](LICENSE).
+Run the regression suite with `python -m unittest discover -s tests -v`. The Windows integration test opens a temporary WPF window in the test session and exercises it through the public CLI. Any2CLI started from MacPaw’s GUIrilla and retains its original [MIT license](LICENSE).

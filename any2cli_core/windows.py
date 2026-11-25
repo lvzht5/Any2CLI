@@ -197,6 +197,8 @@ class WindowsDriver:
                 if depth and label and role in {"Pane", "Group", "Tab", "TabItem", "ToolBar", "MenuBar", "MenuItem"}:
                     scope = (*scope, label)
                 stack.extend((child, scope, depth + 1) for child in reversed(children))
+            if not frame.ops:
+                self.notes.add("no_supported_uia_controls")
             return frame
         except self.errors as exc:
             raise CatalogError("A UI Automation element became inaccessible.", status="state_changed") from exc

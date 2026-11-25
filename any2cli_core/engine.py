@@ -14,7 +14,7 @@ def state_id(frame):
 
 def window_mode_changed(op, frame):
     inverse = inverse_name(op["name"])
-    return op["id"] not in frame.ops and any(other["kind"] == "menu" and other["scope"] == op["scope"]
+    return inverse is not None and op["id"] not in frame.ops and any(other["kind"] == "menu" and other["scope"] == op["scope"]
             and other["name"].casefold() == inverse for other in frame.ops.values())
 
 
@@ -440,8 +440,8 @@ def execute(cat, key, value, *, driver=None, start=None, dry_run=False, timeout=
     def matches(after):
         if checks_value:
             return after.values.get(live_key(op, after)) == value
-        if op["kind"] == "menu" and inverse_name(op["name"]):
-            return window_mode_changed(op, after)
+        if op["kind"] == "menu" and window_mode_changed(op, after):
+            return True
         return any(at(s, after) for s in expected) if expected else state_id(after) != state_id(frame)
 
     try:
@@ -453,7 +453,7 @@ def execute(cat, key, value, *, driver=None, start=None, dry_run=False, timeout=
     stored_value = value if op["kind"] != "field" else None
     if not matches(observed):
         status, outcome = "unverified", "unverified"
-    elif checks_value or expected or (op["kind"] == "menu" and inverse_name(op["name"])):
+    elif checks_value or expected or (op["kind"] == "menu" and window_mode_changed(op, observed)):
         status, outcome = "verified_ui", "verified"
     else:
         status, outcome = "observed_ui_change", "observed"

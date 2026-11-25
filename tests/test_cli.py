@@ -85,3 +85,13 @@ class GeneratedCLITests(unittest.TestCase):
         original = self.profile.read_bytes()
         self.invoke("explore", "test.other", "--profile", self.profile, "--trace", self.trace, expected=2)
         self.assertEqual(self.profile.read_bytes(), original)
+
+    def test_default_profile_never_targets_an_executable_in_the_current_directory(self):
+        executable = self.folder / "Workspace.exe"
+        executable.write_bytes(b"untouched")
+        trace = json.loads(self.trace.read_text(encoding="utf-8"))
+        trace["application"] = "workspace.exe"
+        self.trace.write_text(json.dumps(trace), encoding="utf-8")
+        result = self.invoke("explore", "Workspace.exe", "--trace", self.trace)
+        self.assertTrue(Path(result["profile"]).samefile(self.folder / ".any2cli" / "workspace.exe.json"))
+        self.assertEqual(executable.read_bytes(), b"untouched")

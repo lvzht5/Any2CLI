@@ -50,7 +50,7 @@ any2cli tree workspace.json --json
 | macOS | `./workspace.cli COMMAND --value "VALUE"` |
 | 两个平台通用 | `any2cli run workspace.json "OPERATION" --value "VALUE"` |
 
-Windows 启动脚本使用当前 `PATH` 中已安装的 `any2cli.exe`。启动脚本和 `run` 都可以接受尚未转换的操作 ID 或唯一名称，在同一次调用中完成注册和执行。使用 `--replay` 可以检查配置中记录过的结果。实时调用会区分三种情况：`verified_ui` 表示已核对目标状态；`observed_ui_change` 表示观察到了界面变化，但没有更具体的结果可核对；`unverified` 表示未能确认效果。
+Windows 启动脚本使用当前 `PATH` 中已安装的 `any2cli.exe`。Agent 传入任意文本时，可以用参数列表直接调用该可执行文件。启动脚本和 `run` 都可以接受尚未转换的操作 ID 或唯一名称，在同一次调用中完成注册和执行。使用 `--replay` 可以检查配置中记录过的结果。实时调用会返回验证状态。`verified_ui` 表示已核对目标状态，`observed_ui_change` 表示观察到了界面变化但缺少更具体的结果可核对，`unverified` 表示未能确认效果。
 
 ## 桌面后端
 
@@ -62,4 +62,4 @@ Windows 启动脚本使用当前 `PATH` 中已安装的 `any2cli.exe`。启动�
 
 ## 开发
 
-运行 `python -m unittest discover -s tests -v` 执行回归测试。Windows 集成测试会在测试会话中创建临时 WPF 窗口，通过公共 CLI 操作并核对结果。项目使用 [MIT 许可证](LICENSE)。
+运行 `python -m unittest discover -s tests -v` 执行回归测试。Windows 集成测试会在测试会话中创建临时 WPF 窗口，通过公共 CLI 操作并核对结果。项目起始于 MacPaw 的 GUIrilla，保留原有的 [MIT 许可证](LICENSE) 和署名。

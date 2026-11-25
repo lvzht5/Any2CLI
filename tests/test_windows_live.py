@@ -8,9 +8,62 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
+from any2cli_core.catalog import CatalogError, empty_catalog
+from any2cli_core.store import Store, bundle_id, live_session
+from any2cli_core.windows import WindowsDriver, select_window
 from test_cli import call_cli
+
+
+class WindowsBindingTests(unittest.TestCase):
+    def test_executable_path_and_exact_window_must_match(self):
+        windows = [SimpleNamespace(ProcessId=i, NativeWindowHandle=i, IsOffscreen=False, Name="Panel")
+                   for i in (1, 2)]
+        paths = {1: r"C:\Install A\Editor.exe", 2: r"C:\Install B\Editor.exe"}
+        with self.assertRaises(CatalogError) as conflict:
+            select_window(windows, paths.get, "editor.exe", "Panel", None, (OSError,))
+        self.assertEqual(conflict.exception.report["status"], "ambiguous")
+        self.assertIs(select_window(windows, paths.get, "editor.exe", "Panel", paths[2], (OSError,)), windows[1])
+        with self.assertRaises(CatalogError) as missing:
+            select_window(windows, paths.get, "editor.exe", "Other", paths[2], (OSError,))
+        self.assertEqual(missing.exception.report["status"], "not_found")
+
+    def test_password_and_foreign_controls_are_never_traversed(self):
+        root = Mock(ProcessId=4, NativeWindowHandle=8, IsOffscreen=False, ControlTypeName="WindowControl",
+                    Name="Panel", AutomationId="")
+        root.GetRuntimeId.return_value = [1, 8]
+        password = Mock(ProcessId=4, IsPassword=True)
+        foreign = Mock(ProcessId=9)
+        root.GetChildren.return_value = [password, foreign]
+        driver = WindowsDriver(SimpleNamespace(ControlFromHandle=lambda handle: root), root)
+        self.assertFalse(driver.observe().ops)
+        self.assertEqual(password.mock_calls, [])
+        self.assertEqual(foreign.mock_calls, [])
+        root.GetRuntimeId.return_value = [2, 8]
+        with self.assertRaises(CatalogError) as stale:
+            driver.observe()
+        self.assertEqual(stale.exception.report["status"], "state_changed")
+
+    def test_executable_identity_locks_and_failed_writes(self):
+        self.assertEqual(bundle_id("Editor + Tools.EXE"), "editor + tools.exe")
+        with self.assertRaises(CatalogError):
+            bundle_id("NUL.exe")
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / "profile.json")
+            store.update(lambda _data: None, initial=empty_catalog("test.workspace"))
+            original = store.path.read_bytes()
+            with self.assertRaises(TypeError):
+                store.update(lambda data: data.update(invalid=object()))
+            self.assertEqual(store.path.read_bytes(), original)
+            self.assertFalse(list(Path(folder).glob(".any2cli-*")))
+        app = uuid4().hex + ".exe"
+        with live_session(app), self.assertRaises(CatalogError) as busy:
+            with live_session(app):
+                self.fail("A second session acquired the same application")
+        self.assertEqual(busy.exception.report["status"], "busy")
 
 
 @unittest.skipUnless(sys.platform == "win32", "requires a Windows desktop session")
