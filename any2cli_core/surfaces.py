@@ -55,7 +55,7 @@ def extract(title, nodes):
         member_roles = {"row", "cell"} if node.role in {"AXList", "AXOutline"} else {"tab", "radio"}
         children_here = [n for n in children[node.path] if n.enabled and n.name]
         members = [n for n in children_here if n.role in member_roles]
-        # Some controls (e.g. Stocks' reporting period) expose button members
+        # Some selection groups expose button members
         # and an explicit group value. Keep these choices explicitly callable.
         if not members and isinstance(node.value, str) and node.role in CONTAINERS:
             buttons = [n for n in children_here if n.role == "button"]

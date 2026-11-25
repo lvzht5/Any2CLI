@@ -16,8 +16,8 @@ class OpenAdaptTests(unittest.TestCase):
         from openadapt_flow.backends.remote_display import MacWindowClient, WindowInfo
         from PIL import Image
 
-        info = WindowInfo(window_id=2, pid=8, owner="Stocks", title="Chart", bounds=(0, 0, 100, 100))
-        self.element = MacElement("0/1/2", None, "button", "1 month", info.pid, info.title,
+        info = WindowInfo(window_id=2, pid=8, owner="Workspace", title="Panel", bounds=(0, 0, 100, 100))
+        self.element = MacElement("0/1/2", None, "button", "Details", info.pid, info.title,
                                   (20, 20, 30, 10), supported_operations=("press",))
         self.ax = Mock(spec=QuartzMacAXClient)
         self.ax.find_candidates.return_value = MacCandidateSet((self.element,))
@@ -48,7 +48,7 @@ class OpenAdaptTests(unittest.TestCase):
     def test_resolves_role_and_name_and_delivers_once(self):
         self.window.click(self.element)
         _, _, locator = self.ax.find_candidates.call_args.args
-        self.assertEqual((locator.role, locator.name, locator.window_name), ("button", "1 month", "Chart"))
+        self.assertEqual((locator.role, locator.name, locator.window_name), ("button", "Details", "Panel"))
         self.assertEqual([call.kwargs["down"] for call in self.client.mouse.call_args_list], [True, False])
         self.ax.is_part_of.assert_called()
         self.client.activate.assert_not_called()
@@ -133,13 +133,13 @@ class OpenAdaptTests(unittest.TestCase):
              patch("ApplicationServices.AXUIElementCreateApplication", return_value={}), \
              patch("openadapt_flow.backends.remote_display.MacWindowClient", return_value=self.client):
             apps.runningApplicationsWithBundleIdentifier_.return_value = [self.window.app]
-            self.assertIs(connect("org.example.player").window, windows[0])
+            self.assertIs(connect("test.workspace").window, windows[0])
             windows.append({"AXTitle": "Library"})
-            self.assertIs(connect("org.example.player").window, windows[1])
-            self.assertIs(connect("org.example.player", "").window, windows[0])
+            self.assertIs(connect("test.workspace").window, windows[1])
+            self.assertIs(connect("test.workspace", "").window, windows[0])
             windows[1]["AXTitle"] = ""
             with self.assertRaises(AdapterError):
-                connect("org.example.player")
+                connect("test.workspace")
 
 
 if __name__ == "__main__":

@@ -1,15 +1,14 @@
-"""Discover CLI parameters in GUIrilla graphs and run supported desktop adapters."""
+"""Discover desktop operations and turn them into reusable commands."""
 
 import argparse
 import json
-import math
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # StructuralLocator role names used by OpenAdapt's macOS backend.
 CHOICE_ROLES = {"AXButton": "button", "AXRadioButton": "radio", "AXMenuItem": "menuitem"}
@@ -149,16 +148,11 @@ def bind_choice(discovery, title, value):
             "target": evidence[0]["locator"], "evidence": [e["edge"] for e in evidence]}
 
 
-def timeout_seconds(value):
-    seconds = float(value)
-    if not math.isfinite(seconds) or seconds < 0:
-        raise argparse.ArgumentTypeError("expected a finite, non-negative number of seconds")
-    return seconds
-
-
 def main(argv=None):
     from any2cli_core import cli
 
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) >= 2 and argv[0] == "app" and not argv[1].startswith("-"):
         return cli.output(cli.app_cli, argv[1], argv[2:])
@@ -172,16 +166,6 @@ def main(argv=None):
     bind.add_argument("graph", type=Path)
     bind.add_argument("--control", required=True, help="Exact parameter title from discover")
     bind.add_argument("--value", required=True, help="An observed enum value")
-    stocks = commands.add_parser("stocks", help="Use the currently displayed Apple Stocks chart")
-    stocks.set_defaults(bundle_id="com.apple.stocks")
-    operations = stocks.add_subparsers(dest="operation", required=True)
-    period = operations.add_parser("period", help="Select a chart period and verify its date samples")
-    period.add_argument("value", choices=("1m", "1 month"), help="One calendar month")
-    period.add_argument("--window", help="Exact title when Stocks has multiple windows")
-    period.add_argument("--check-only", action="store_true", help="Read the current chart once without input")
-    period.add_argument("--foreground", action="store_true", help="Allow a physical click in the active Stocks window")
-    period.add_argument("--timeout", type=timeout_seconds, default=8.0, metavar="SECONDS",
-                        help="How long to wait for the chart to refresh after selection (default: 8)")
     args = parser.parse_args(argv)
     if args.command in ("discover", "bind"):
         try:
@@ -193,20 +177,6 @@ def main(argv=None):
             print(f"any2cli: {exc}", file=sys.stderr)
             return 1
         exit_code = 0
-    elif args.command == "stocks":
-        from macos_openadapt import AdapterError, connect
-
-        try:
-            from stocks_adapter import run
-
-            window = connect(args.bundle_id, args.window, foreground=args.foreground)
-            result = run(window, check_only=args.check_only, timeout=args.timeout)
-        except AdapterError as exc:
-            result = exc.report
-        except (OSError, RuntimeError) as exc:
-            result = {"status": "unavailable", "message": str(exc)}
-        result = {"application": args.bundle_id, "period": "1m", **result}
-        exit_code = {"verified": 0, "unverified": 1}.get(result["status"], 2)
     else:
         return cli.output(cli.dispatch, args)
     print(json.dumps(result, ensure_ascii=False, indent=2))

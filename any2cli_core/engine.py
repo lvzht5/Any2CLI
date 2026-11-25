@@ -1,12 +1,11 @@
 """Bounded exploration, path planning and lazy execution."""
 
-import json
 import time
 
-from macos_openadapt import AdapterError
+from .drivers import AdapterError
 
-from .catalog import (CatalogError, DISCRETE, WINDOW_MODES, empty_catalog, inverse_name, navigation_id,
-                      remember, route, schema, transition, transition_outcome)
+from .catalog import (CatalogError, DISCRETE, empty_catalog, inverse_name, navigation_id,
+                      remember, route, transition, transition_outcome)
 
 
 def state_id(frame):
@@ -14,7 +13,7 @@ def state_id(frame):
 
 
 def window_mode_changed(op, frame):
-    inverse = WINDOW_MODES.get(op["name"].casefold())
+    inverse = inverse_name(op["name"])
     return op["id"] not in frame.ops and any(other["kind"] == "menu" and other["scope"] == op["scope"]
             and other["name"].casefold() == inverse for other in frame.ops.values())
 
@@ -220,22 +219,6 @@ def explore_live(app, driver, *, steps, depth, timeout, follow=()):
 
 def input_value(op, value):
     kind = op["kind"]
-    if kind == "algorithm":
-        try:
-            inputs = {} if value is None else json.loads(value)
-        except (TypeError, ValueError):
-            inputs = None
-        if not isinstance(inputs, dict):
-            raise CatalogError("Supply --value as a JSON object of QGIS parameters.", status="invalid_input")
-        if "parameters" in op:
-            contract = schema(op)
-            unknown = sorted(inputs.keys() - contract["properties"].keys())
-            if unknown:
-                raise CatalogError("Unknown QGIS parameter names.", status="invalid_input", parameters=unknown)
-            missing = [name for name in contract["required"] if inputs.get(name) is None]
-            if missing:
-                raise CatalogError("Missing mandatory QGIS parameters.", status="invalid_input", parameters=missing)
-        return inputs
     if kind in {"choice", "field"}:
         if not isinstance(value, str) or (kind == "choice" and value not in op["options"]):
             raise CatalogError("Supply --value with an allowed parameter.", status="invalid_input",
@@ -457,7 +440,7 @@ def execute(cat, key, value, *, driver=None, start=None, dry_run=False, timeout=
     def matches(after):
         if checks_value:
             return after.values.get(live_key(op, after)) == value
-        if op["kind"] == "menu" and op["name"].casefold() in WINDOW_MODES:
+        if op["kind"] == "menu" and inverse_name(op["name"]):
             return window_mode_changed(op, after)
         return any(at(s, after) for s in expected) if expected else state_id(after) != state_id(frame)
 
@@ -470,7 +453,7 @@ def execute(cat, key, value, *, driver=None, start=None, dry_run=False, timeout=
     stored_value = value if op["kind"] != "field" else None
     if not matches(observed):
         status, outcome = "unverified", "unverified"
-    elif checks_value or expected or (op["kind"] == "menu" and op["name"].casefold() in WINDOW_MODES):
+    elif checks_value or expected or (op["kind"] == "menu" and inverse_name(op["name"])):
         status, outcome = "verified_ui", "verified"
     else:
         status, outcome = "observed_ui_change", "observed"

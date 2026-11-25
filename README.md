@@ -1,69 +1,65 @@
 # Any2CLI
 
-Any2CLI 让 Agent 从桌面应用中发现操作，并把它们变成可重复调用的命令。它保存每个已观察页面的控件、可选参数和实际走过的导航路径。首次探索通常生成 4 至 12 个子命令，其他操作可以在树中搜索，第一次调用时再生成。
+[简体中文](README.zh-CN.md)
 
-实时后端支持 macOS。对闭源应用，Any2CLI 优先读取辅助功能树。对于缺少可访问控件的自绘界面，它也能从目标窗口识别部分带高亮的侧栏和带下划线的页签。Apple Music 资料库和 QGIS 地理处理还可以直接使用各自的本地接口。
+Any2CLI gives agents a command-line interface to desktop apps on Windows and macOS. Point it at an open window and it builds a searchable tree of the operations exposed by its controls. It generates an initial set of commands, then lets an agent turn another operation into a command when it needs it. The target can be closed-source and does not need a public application API.
 
-## 先试一次离线回放
+## Install
 
-在仓库根目录运行以下命令即可试用，需要 Python 3.9 或更高版本，以及 macOS 或 Linux。样例只包含网易云音乐公开的菜单和导航名称。
-
-```sh
-python3 -m any2cli explore com.netease.163music \
-  --trace examples/netease.zh.trace.json --profile .any2cli/netease.json
-python3 -m any2cli tree .any2cli/netease.json
-.any2cli/netease.cli --help
-.any2cli/netease.cli 精选页签 --value 排行榜 --replay
-```
-
-从推荐页调用排行榜时，返回的 `route` 包含前置操作 `侧栏 = 精选`。结果中的 `mode: recording` 和 `status: replayed` 表示这次调用的结果来自已记录的状态转换。此例有 4 个页面状态和 6 条转换。[样例操作树](examples/netease.zh.trace.json)
-
-要试按需生成，可以找一个尚未注册的读操作，并查看它的调用计划。
+Clone the repository and, in an activated Python environment, install the backend for your desktop. Python 3.12 is supported by both backends.
 
 ```sh
-python3 -m any2cli find .any2cli/netease.json 当前精选页签 --limit 1
-.any2cli/netease.cli 当前精选页签 --dry-run
-.any2cli/netease.cli --help
+git clone https://github.com/lvzht5/Any2CLI.git
+cd Any2CLI
 ```
 
-首次规划返回 `newly_compiled: true`。生成的命令保存在同一档案里，后续进程可以直接复用。
+| Platform | Install from the checkout | Identify an open application |
+| --- | --- | --- |
+| Windows | `python -m pip install ".[windows]"` | Executable filename such as `<process>.exe`, or the full path to the executable |
+| macOS | `python -m pip install ".[macos]"` | Bundle identifier, installed name or full `.app` path |
+| Offline use | `python -m pip install .` | Work with an existing profile or import a trace on any supported Python platform |
 
-## 在 macOS 上探索已打开的应用
+## From a window to commands
+
+Replace the uppercase arguments below with the target, operation, command and value for your window. Keep the target open. Add `--window "Exact title"` to live calls if several windows match.
 
 ```sh
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install '.[macos]'
-
-any2cli explore 网易云音乐 --profile .any2cli/live.json
-any2cli commands .any2cli/live.json
-.any2cli/live.cli 当前页面
+any2cli explore "APPLICATION" --profile workspace.json
+any2cli commands workspace.json
+any2cli tree workspace.json
+any2cli find workspace.json "SEARCH TERMS"
+any2cli convert workspace.json "OPERATION"
+any2cli app workspace.json COMMAND --help
+any2cli app workspace.json COMMAND --dry-run
 ```
 
-实时后端使用 Python 3.10 至 3.12。默认探索只观察一次已打开的窗口。读取原生控件需要给启动 CLI 的应用授予「辅助功能」权限，识别自绘区域还需要「屏幕与系统音频录制」权限。应用有多个窗口时，可以用 `--window` 指定标题。
+The first scan observes the current window. By default, it registers 4–12 commands when enough distinct controls exist. Set `--primary N` to choose the initial count. On subsequent scans of the same profile, newly discovered states and commands are merged with the existing registry.
 
-需要探索下一级页面时，可以指定已观察到的入口。例如，在网易云音乐推荐页开始，让目标窗口保持在前台，以下命令会试走一次“精选”并核对回程。
+To explore beyond the first state, give the agent a navigation budget. `--steps` limits forward probes and `--depth` limits nesting. The explorer attempts to restore the starting state and reports any incomplete return. `--follow "CONTROL"` or `--follow "SELECTOR=OPTION"` directs a probe to a particular operation.
 
 ```sh
-any2cli explore 网易云音乐 --profile .any2cli/live.json \
-  --follow '侧栏=精选' --steps 1 --depth 1 --foreground
+any2cli explore "APPLICATION" --profile workspace.json --steps 3 --depth 2
+any2cli tree workspace.json --json
 ```
 
-`--steps` 限制向前探测的次数，`--depth` 限制深度。打开菜单和实体点击需要显式指定 `--foreground`。切走窗口会停止后续前台输入。探索结束时，`exploration.restored` 表示是否已核实回到起点。
+For a live call, omit `--dry-run`. A field accepts text, a choice accepts one of its listed options, and a switch accepts `true` or `false`. The generated launcher sits beside the profile.
 
-## 其他入口
-
-| 任务 | 命令 |
+| Interface | Call a command that accepts a value |
 | --- | --- |
-| 导出完整操作树 | `any2cli tree PROFILE --json` |
-| 查找或单独生成一个操作 | `any2cli find PROFILE QUERY`、`any2cli convert PROFILE QUERY` |
-| 按名称、路径或操作 ID 调用 | `any2cli run PROFILE QUERY` |
-| 导入 GUIrilla 操作记录 | `any2cli explore APP --graph graph/data.json --profile PROFILE` |
-| 读取 Apple Music 资料库的统计项 | `any2cli explore 音乐 --library --profile PROFILE` |
-| 索引本机 QGIS Processing 算法 | `any2cli explore QGIS --processing --profile PROFILE` |
+| Windows, from PowerShell | `.\workspace.cmd COMMAND --value "VALUE"` |
+| macOS | `./workspace.cli COMMAND --value "VALUE"` |
+| Either platform | `any2cli run workspace.json "OPERATION" --value "VALUE"` |
 
-`--dry-run` 用来检查路径，`--replay` 用来重放已有记录。两者均可离线运行。回归测试使用 `python -m unittest discover -s tests`，macOS 后端用模拟输入测试焦点和鼠标行为。
+The Windows launcher uses the installed `any2cli.exe` on `PATH`. Both the launcher and `run` can resolve an uncompiled operation by its ID or unique name, register it, and invoke it in one call. Use `--replay` to check an outcome recorded in the profile. A live call reports `verified_ui` when its postcondition is met, `observed_ui_change` for an unexpected or previously unverified change with no stronger postcondition, and `unverified` when it cannot confirm an effect.
 
-## 来源与许可证
+## Desktop backends
 
-项目起始于 MacPaw 的 GUIrilla，保留其 MIT 许可证和署名。桌面操作复用 OpenAdapt Flow。此仓库包含 Any2CLI 运行所需的代码。[GUIrilla 上游版本](https://github.com/MacPaw/GUIrilla/tree/15896d8c3158b7c4bbfaafc57582f1a28ff50074) · [OpenAdapt Flow](https://pypi.org/project/openadapt-flow/3.4.0/) · [MIT 许可证](LICENSE)
+**Windows** uses Microsoft UI Automation through the Python `uiautomation` package. It attaches to a visible window in the same desktop session, binds it by process and window handle, and uses control patterns to invoke buttons, read and set fields, change switches, select tabs, and expand or collapse controls. It sends no global mouse clicks or keystrokes. Password fields and bulk document contents are skipped. Coverage depends on what an app exposes through UI Automation. [UI Automation control patterns](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-controlpatternsoverview) · [Python UIAutomation](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows)
+
+**macOS** uses Accessibility and OpenAdapt. Grant Accessibility access to the app launching the CLI for live use. Native controls expose names, roles and values. Where the accessibility surface is sparse, the optional visual path can identify selected navigation groups if Screen Recording access is already granted. Foreground-only actions require `--foreground` and a target window that already has focus. [OpenAdapt Flow](https://github.com/OpenAdaptAI/openadapt-flow)
+
+Profiles are local JSON files and can contain window titles and control labels. Free-form field values are kept out of saved navigation evidence. The default location is `.any2cli/`. For offline exploration, `explore` accepts `--trace FILE` for an `any2cli.trace.v1` recording or `--graph FILE` for a GUIrilla graph. [GUIrilla](https://github.com/MacPaw/GUIrilla)
+
+## Development
+
+Run the regression suite with `python -m unittest discover -s tests -v`. The Windows integration test opens a temporary WPF window in the test session and exercises it through the public CLI. Any2CLI is distributed under the [MIT license](LICENSE).

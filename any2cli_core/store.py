@@ -1,18 +1,24 @@
 """Local, versioned profiles with atomic writes and serialized registry updates."""
 
 import json
+import errno
+import hashlib
 import os
 import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from .catalog import CatalogError, FORMAT
+from .catalog import CatalogError, FORMAT, KINDS
 
 
 def bundle_id(value):
+    if value.casefold().endswith(".exe") and re.fullmatch(r'[\w(][\w .()\-]*\.exe', value, re.I):
+        if value.split(".", 1)[0].upper() not in {"CON", "PRN", "AUX", "NUL", *(f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10))}:
+            return value.casefold()
+        raise CatalogError("Reserved Windows device name.")
     if re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+", value) is None:
-        raise CatalogError("Expected an application bundle ID or a path to an installed .app.")
+        raise CatalogError("Expected an application bundle ID or an executable name ending in .exe.")
     return value
 
 
@@ -29,10 +35,8 @@ def exclusive(file, *, wait=True):
         import msvcrt
 
         file.seek(0)
-        if not file.read(1):
-            file.write(b"\0")
-            file.flush()
-        file.seek(0)
+        # Windows permits locking a range beyond EOF. Reading an already
+        # locked byte here would fail before the blocking acquisition.
         msvcrt.locking(file.fileno(), msvcrt.LK_LOCK if wait else msvcrt.LK_NBLCK, 1)
         try:
             yield
@@ -58,6 +62,9 @@ class Store:
             data = json.load(stream)
         if not isinstance(data, dict) or data.get("format") != FORMAT:
             raise CatalogError("Unsupported Any2CLI profile format.")
+        if any(op.get("kind") not in KINDS for op in data["operations"].values()):
+            raise CatalogError("This profile contains retired operations. Explore into a new profile.",
+                               status="unsupported_profile")
         return data
 
     def update(self, change, *, initial=None):
@@ -89,15 +96,20 @@ class Store:
 @contextmanager
 def live_session(app):
     # Window state is process-global even if two profiles target the same app.
-    if os.name == "nt":
-        raise CatalogError("Live desktop operation currently requires macOS.")
-    path = Path(tempfile.gettempdir()) / f"any2cli-{os.getuid()}-{bundle_id(app)}.lock"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "a+b") as lock:
-        import fcntl
-
+    key = bundle_id(app)
+    name = ("any2cli-" + hashlib.sha256(key.encode()).hexdigest() + ".lock" if os.name == "nt"
+            else f"any2cli-{os.getuid()}-{key}.lock")
+    path = Path(tempfile.gettempdir()) / name
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "r+b") as lock:
+        guard = exclusive(lock, wait=False)
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            guard.__enter__()
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise
             raise CatalogError("Another Any2CLI session is using this application.", status="busy") from exc
-        yield
+        try:
+            yield
+        finally:
+            guard.__exit__(None, None, None)

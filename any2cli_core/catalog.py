@@ -9,19 +9,14 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 
-KINDS = {"press", "menu", "field", "choice", "toggle", "expand", "read", "algorithm", "library-read"}
-SERVICE_KINDS = {"algorithm", "library-read"}
+KINDS = {"press", "menu", "field", "choice", "toggle", "expand", "read"}
 DISCRETE = {"choice", "toggle", "expand"}
 OUTCOMES = ("unverified", "observed", "verified")
 FORMAT = "any2cli.profile.v1"
-WINDOW_MODES = {"切换至迷你模式": "切换至完整模式", "切换至完整模式": "切换至迷你模式",
-                "switch to mini player": "switch to full player", "switch to full player": "switch to mini player"}
 
 
 def inverse_name(name):
     name = name.casefold()
-    if name in WINDOW_MODES:
-        return WINDOW_MODES[name]
     for first, second in (("show ", "hide "), ("expand ", "collapse "), ("显示", "隐藏"),
                           ("顯示", "隱藏"), ("展开", "收起"), ("展開", "收起")):
         for prefix, replacement in ((first, second), (second, first)):
@@ -132,12 +127,8 @@ def merge_op(operations, op):
         operations[key] = dict(op)
     elif op["kind"] == "choice":
         operations[key]["options"] = sorted(set(operations[key]["options"]) | set(op["options"]))
-    elif op["kind"] == "algorithm" and op.get("group"):
-        operations[key]["group"] = op["group"]
     if op.get("help"):
         operations[key]["help"] = op["help"]
-    if "starter_priority" in op:
-        operations[key]["starter_priority"] = op["starter_priority"]
 
 
 def remember(catalog, frame):
@@ -190,10 +181,9 @@ def merge_catalog(existing, incoming):
         raise CatalogError("This profile belongs to a different application.")
     if incoming.get("app_path"):
         if existing.get("app_path", incoming["app_path"]) != incoming["app_path"]:
-            raise CatalogError("This profile is bound to a different installed .app path.")
+            raise CatalogError("This profile is bound to a different application path.")
         existing["app_path"] = incoming["app_path"]
-    services = {"qgis-process", "music-library"}
-    if not existing["root"] or (set(existing["sources"]) <= services and set(incoming["sources"]) - services):
+    if not existing["root"]:
         existing["root"] = incoming["root"]
     for key, state in incoming["states"].items():
         merge_state(existing["states"], key, state)
@@ -208,19 +198,8 @@ def merge_catalog(existing, incoming):
     existing.setdefault("recordings", {}).update(incoming.get("recordings", {}))
 
 
-def algorithm_parameters(properties):
-    required = [name for name, spec in properties.items()
-                if spec.get("x-qgis-optional") is False and "default" not in spec]
-    return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
-
-
 def schema(op):
     kind = op["kind"]
-    if kind == "algorithm":
-        contract = op.get("parameters", {"type": "object"})
-        if "properties" in contract and "required" not in contract:
-            return algorithm_parameters(contract["properties"])
-        return contract
     if kind == "choice":
         return {"type": "string", "enum": op["options"]}
     if kind in {"toggle", "expand"}:
@@ -251,8 +230,7 @@ def describe(catalog, key):
     edges = [e for e in catalog["transitions"] if e["operation"] == key]
     values = {e["value"] for e in edges if e["value"] is not None and transition_outcome(e) == "verified" and
               catalog["states"][e["to"]]["selected"].get(key) == e["value"]}
-    public = {k: v for k, v in op.items() if k not in {"parameters", "parameter_source", "starter_priority"}}
-    return {**public, "command": cmd, "input": schema(op),
+    return {**op, "command": cmd, "input": schema(op),
             "evidence": {"states": sum(key in s["operations"] for s in catalog["states"].values()),
                          "recorded_transitions": len(edges), "confirmed_values": sorted(values)}}
 
@@ -269,13 +247,11 @@ def initial_commands(catalog, count=None):
             if edge["from"] == catalog["root"]:
                 from_root.add(edge["operation"])
     root = set(catalog["states"][catalog["root"]]["operations"])
-    base = {"choice": 42, "field": 30, "toggle": 22, "expand": 20, "read": 18, "menu": 12, "press": 9,
-            "algorithm": 1, "library-read": 18}
+    base = {"choice": 42, "field": 30, "toggle": 22, "expand": 20, "read": 18, "menu": 12, "press": 9}
 
     def rank(op):
         score = base[op["kind"]] + 16 * min(len(observed[op["id"]]), 3) + 12 * (op["id"] in root)
         score += 20 * (op["id"] in from_root)
-        score += op.get("starter_priority", 0)
         if op["kind"] == "menu":
             scopes = [s.casefold() for s in op["scope"]]
             name = op["name"].casefold()
@@ -283,17 +259,11 @@ def initial_commands(catalog, count=None):
                 score -= 16
             if any(s in {"services", "服务", "服務"} for s in scopes):
                 score -= 80
-            if scopes[0] in {"controls", "playback", "控制", "播放"}:
-                score += 14
-                if name in {"play", "pause", "播放", "暂停", "暫停"}:
-                    score += 10
             if name.startswith(("about ", "关于", "關於")) or name in {"feedback", "意见反馈", "意見反饋"}:
                 score -= 30
             if name.startswith(("hide ", "quit ", "隐藏", "退出", "隱藏")) or name in {"delete", "删除", "刪除"}:
                 score -= 44
-            if name in WINDOW_MODES:
-                score += 38
-            elif inverse_name(name):
+            if inverse_name(name):
                 score += 8
         if op["name"].isdigit():
             score -= 15
@@ -304,7 +274,7 @@ def initial_commands(catalog, count=None):
     group_sizes = defaultdict(int)
     ranked = []
     for op in sorted(catalog["operations"].values(), key=rank):
-        group = (op["kind"], op.get("group"), tuple(op["scope"]))
+        group = (op["kind"], tuple(op["scope"]))
         score, depth, name, key = rank(op)
         ranked.append((score + 8 * group_sizes[group], depth, name, key))
         group_sizes[group] += 1
@@ -326,15 +296,6 @@ def search(catalog, query):
         raise CatalogError("Enter a control name, operation ID or search terms.")
     if q in catalog["operations"]:
         return [q]
-    if re.fullmatch(r"[a-z0-9_]+:[a-z0-9_]+", q):
-        # A provider prefix is shared by the entire Processing catalog.
-        prefix = q.split(":", 1)[0] + ":"
-        algorithms = [op for op in catalog["operations"].values() if op["kind"] == "algorithm"
-                      and op["name"].startswith(prefix)]
-        exact = [op["id"] for op in algorithms if op["name"] == q]
-        if algorithms:
-            return exact or [op["id"] for op in sorted(algorithms, key=lambda op: op["name"])
-                             if op["name"].startswith(q)]
     qt = terms(q)
     results = []
     for key, op in catalog["operations"].items():

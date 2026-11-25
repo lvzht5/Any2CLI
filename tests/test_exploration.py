@@ -7,7 +7,7 @@ from any2cli_core.engine import execute, explore_live, return_control, state_id
 from any2cli_core.surfaces import Node, extract
 
 
-class DemoApp:
+class TestWindow:
     """An interactive state machine; the crawler is given only the current UI."""
 
     def __init__(self, link="Details"):
@@ -20,7 +20,7 @@ class DemoApp:
         self.calls = []
 
     def observe(self):
-        frame = Frame("Demo")
+        frame = Frame("Workspace")
         if self.panel:
             frame.add(operation("field", "textbox", "Query"), self.text)
             frame.add(operation("read", "text", "Result"), self.text.upper())
@@ -116,7 +116,7 @@ class ExplorationTests(unittest.TestCase):
                 driver.perform.assert_not_called()
 
     def test_document_title_can_change_only_for_a_unique_complete_structure(self):
-        class Document(DemoApp):
+        class Document(TestWindow):
             title = "Project A"
             def observe(self):
                 frame = super().observe()
@@ -145,8 +145,8 @@ class ExplorationTests(unittest.TestCase):
         self.assertIsNone(return_control(frame, operation("press", "button", "Details")))
 
     def test_autonomous_exploration_then_live_parameterized_nested_command(self):
-        app = DemoApp()
-        cat, coverage = explore_live("org.example.demo", app, steps=5, depth=3, timeout=0)
+        app = TestWindow()
+        cat, coverage = explore_live("test.workspace", app, steps=5, depth=3, timeout=0)
         self.assertEqual(coverage["issues"], [])
         self.assertTrue(coverage["restored"])
         self.assertEqual((coverage["probes"], coverage["return_actions"]), (2, 2))
@@ -163,8 +163,8 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(readback["value"], "PRIVATE SAMPLE")
 
     def test_changed_prerequisite_stops_before_the_final_action(self):
-        app = DemoApp()
-        cat, _ = explore_live("org.example.demo", app, steps=5, depth=3, timeout=0)
+        app = TestWindow()
+        cat, _ = explore_live("test.workspace", app, steps=5, depth=3, timeout=0)
         app.calls.clear()
         app.drift = True
         result = execute(cat, resolve(cat, "Query"), "x", driver=app, timeout=0)
@@ -172,52 +172,52 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(app.calls, [("Tabs", "Reports")])
 
     def test_budgets_and_explicit_agent_directed_navigation(self):
-        app = DemoApp(link="Inspector")
-        cat, report = explore_live("org.example.demo", app, steps=1, depth=3, timeout=0)
+        app = TestWindow(link="Inspector")
+        cat, report = explore_live("test.workspace", app, steps=1, depth=3, timeout=0)
         self.assertTrue(report["step_limit_reached"])
         self.assertEqual(len(cat["states"]), 2)
-        cat, report = explore_live("org.example.demo", app, steps=5, depth=3, timeout=0, follow=["Inspector"])
+        cat, report = explore_live("test.workspace", app, steps=5, depth=3, timeout=0, follow=["Inspector"])
         self.assertEqual(len(cat["states"]), 3)
         self.assertEqual(report["issues"], [])
         self.assertTrue(report["restored"])
-        shallow, _ = explore_live("org.example.demo", app, steps=50, depth=0, timeout=0)
+        shallow, _ = explore_live("test.workspace", app, steps=50, depth=0, timeout=0)
         self.assertEqual(len(shallow["states"]), 1)
 
     def test_follow_parameterized_choice_checks_both_legs(self):
-        app = DemoApp()
-        cat, report = explore_live("org.example.demo", app, steps=1, depth=1, timeout=0, follow=["Tabs=Reports"])
+        app = TestWindow()
+        cat, report = explore_live("test.workspace", app, steps=1, depth=1, timeout=0, follow=["Tabs=Reports"])
         self.assertEqual(app.calls, [("Tabs", "Reports"), ("Tabs", "Overview")])
         self.assertTrue(report["restored"])
         self.assertEqual(sum(e["navigation"] for e in cat["transitions"]), 2)
 
     def test_failed_return_preserves_the_observed_partial_tree(self):
-        app = DemoApp()
+        app = TestWindow()
         app.back = False
-        cat, report = explore_live("org.example.demo", app, steps=3, depth=3, timeout=0)
+        cat, report = explore_live("test.workspace", app, steps=3, depth=3, timeout=0)
         self.assertFalse(report["restored"])
         self.assertTrue(report["issues"])
         self.assertIn(resolve(cat, "Query"), cat["states"][state_id(app.observe())]["operations"])
         self.assertFalse(any(e["navigation"] for e in cat["transitions"]))
 
     def test_interrupt_retains_already_observed_state(self):
-        class Interrupted(DemoApp):
+        class Interrupted(TestWindow):
             def perform(self, frame, key, value):
                 raise KeyboardInterrupt
 
-        cat, report = explore_live("org.example.demo", Interrupted(), steps=3, depth=2, timeout=0)
+        cat, report = explore_live("test.workspace", Interrupted(), steps=3, depth=2, timeout=0)
         self.assertEqual(report["issues"][0]["status"], "interrupted")
         self.assertTrue(report["restored"])
         self.assertTrue(cat["root"])
 
     def test_interrupt_in_a_nested_probe_cancels_pending_return_actions(self):
-        class Interrupted(DemoApp):
+        class Interrupted(TestWindow):
             def perform(self, frame, key, value):
                 if self.tab == "Reports":
                     raise KeyboardInterrupt
                 super().perform(frame, key, value)
 
         app = Interrupted()
-        cat, report = explore_live("org.example.demo", app, steps=2, depth=2, timeout=0)
+        cat, report = explore_live("test.workspace", app, steps=2, depth=2, timeout=0)
         self.assertEqual(app.calls, [("Tabs", "Reports")])
         self.assertFalse(report["restored"])
         self.assertEqual(report["return_actions"], 0)
@@ -225,10 +225,10 @@ class ExplorationTests(unittest.TestCase):
         self.assertFalse(any(edge["navigation"] for edge in cat["transitions"]))
 
     def test_duplicate_nonnative_controls_and_selected_tabs(self):
-        nodes = [Node((0,), "AXWindow", "Demo"), Node((0, 1), "AXTabGroup", ""),
+        nodes = [Node((0,), "AXWindow", "Workspace"), Node((0, 1), "AXTabGroup", ""),
                  Node((0, 1, 0), "tab", "A", selected=True), Node((0, 1, 1), "tab", "B"),
                  Node((0, 2), "button", "Apply"), Node((0, 3), "button", "Apply")]
-        frame, _ = extract("Demo", nodes)
+        frame, _ = extract("Workspace", nodes)
         self.assertEqual(len(frame.ambiguous), 1)
         self.assertEqual([op["name"] for op in frame.ops.values()], ["Tabs"])
         self.assertEqual(len(frame.probes), 1)

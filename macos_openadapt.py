@@ -6,10 +6,7 @@ import time
 from pathlib import Path
 
 
-class AdapterError(RuntimeError):
-    def __init__(self, status, message, **details):
-        super().__init__(message)
-        self.report = {"status": status, "message": message, **details}
+from any2cli_core.drivers import AdapterError
 
 
 def missing_permission(name):

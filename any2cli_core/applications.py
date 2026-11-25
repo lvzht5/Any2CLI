@@ -1,6 +1,7 @@
-"""Resolve an installed macOS application by bundle metadata or localized name."""
+"""Resolve native application identities without starting a process."""
 
 import plistlib
+import sys
 import unicodedata
 from pathlib import Path
 from xml.parsers.expat import ExpatError
@@ -46,8 +47,16 @@ def _localized_match(app, wanted):
 
 
 def resolve_application(subject, roots=None):
-    """Return (bundle ID, exact local path). A bundle ID alone stays portable."""
+    """Return an identity and, when supplied, an exact installation path."""
     path = Path(subject).expanduser()
+    if sys.platform == "win32" and roots is None:
+        if path.drive or path.parent != Path(".") or "/" in subject or "\\" in subject:
+            if path.suffix.casefold() != ".exe" or not path.is_file():
+                raise CatalogError("Expected a path to an installed .exe.", path=str(path))
+            return bundle_id(path.name), str(path.resolve())
+        return bundle_id(subject), None
+    if path.name == subject and subject.casefold().endswith(".exe"):
+        return bundle_id(subject), None
     if path.is_dir() or "/" in subject:
         info = _plist(path / "Contents/Info.plist")
         if path.suffix.lower() != ".app" or not isinstance(info.get("CFBundleIdentifier"), str):

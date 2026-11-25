@@ -17,19 +17,19 @@ from macos_openadapt import AdapterError, NativeWindow
 class NavigationStateTests(unittest.TestCase):
     def test_default_explore_observes_once_without_opening_or_moving_the_window(self):
         page = Frame("")
-        key = page.add(operation("choice", "visual-sidebar", "侧栏", options=["推荐", "精选"]), "推荐")
-        page.probes.append((key, "精选", key, "推荐"))
+        key = page.add(operation("choice", "visual-sidebar", "侧栏", options=["概览", "详情"]), "概览")
+        page.probes.append((key, "详情", key, "概览"))
         driver = Mock(notes=set())
         driver.observe.return_value = page
         with tempfile.TemporaryDirectory() as folder, redirect_stdout(io.StringIO()), \
-             patch("any2cli_core.cli.NativeDriver.open", return_value=driver) as opened:
-            self.assertEqual(main(["explore", "org.example.player", "--profile", str(Path(folder) / "ui.json")]), 0)
-            opened.assert_called_once_with("org.example.player", None, app_path=None, foreground=False)
+             patch("any2cli_core.cli.open_driver", return_value=driver) as opened:
+            self.assertEqual(main(["explore", "test.workspace", "--profile", str(Path(folder) / "ui.json")]), 0)
+            opened.assert_called_once_with("test.workspace", None, app_path=None, foreground=False)
         driver.observe.assert_called_once_with()
         driver.perform.assert_not_called()
         with patch("any2cli_core.native.connect") as connect, patch.object(NativeDriver, "__init__", return_value=None):
-            NativeDriver.open("org.example.player")
-        connect.assert_called_once_with("org.example.player", None, app_path=None, foreground=False)
+            NativeDriver.open("test.workspace")
+        connect.assert_called_once_with("test.workspace", None, app_path=None, foreground=False)
 
     def test_background_visual_and_indirect_reads_stop_before_navigation(self):
         app = Mock()
@@ -38,8 +38,8 @@ class NavigationStateTests(unittest.TestCase):
         with patch.object(NativeDriver, "__init__", return_value=None):
             driver = NativeDriver(window)
         driver.window = window
-        row = operation("choice", "visual-sidebar", "侧栏", options=["推荐", "精选"])
-        read = operation("read", "visual-selection", "当前精选页签")
+        row = operation("choice", "visual-sidebar", "侧栏", options=["概览", "详情"])
+        read = operation("read", "visual-selection", "当前页签")
         with self.assertRaises(AdapterError) as blocked:
             driver.check_route([row], row)
         self.assertEqual(blocked.exception.report["status"], "foreground_required")
@@ -48,13 +48,13 @@ class NavigationStateTests(unittest.TestCase):
         self.assertEqual(off_page.exception.report["status"], "navigation_required")
         if find_spec("openadapt_flow"):
             with patch.object(visual, "window_info") as locate, self.assertRaises(AdapterError):
-                visual.select(window, None, "精选", row)
+                visual.select(window, None, "详情", row)
             locate.assert_not_called()
         self.assertEqual(window.client.mock_calls, [])
 
     def test_conditional_host_items_do_not_split_the_same_page(self):
         menu = operation("menu", "menuitem", "拷贝", ["编辑"])
-        side = operation("choice", "visual-sidebar", "侧栏", options=["推荐", "精选", "播客"])
+        side = operation("choice", "visual-sidebar", "侧栏", options=["概览", "详情", "面板"])
 
         def page(name, enabled):
             frame = Frame("")
@@ -65,10 +65,10 @@ class NavigationStateTests(unittest.TestCase):
                 frame.conditional.add(key)
             return frame
 
-        minimal = page("推荐", False)
-        expanded = page("推荐", True)
+        minimal = page("概览", False)
+        expanded = page("概览", True)
         self.assertEqual(state_id(minimal), state_id(expanded))
-        self.assertNotEqual(state_id(expanded), state_id(page("精选", True)))
+        self.assertNotEqual(state_id(expanded), state_id(page("详情", True)))
         first, second = empty_catalog("example.app"), empty_catalog("example.app")
         key = remember(first, expanded)
         remember(second, minimal)
@@ -77,11 +77,11 @@ class NavigationStateTests(unittest.TestCase):
         self.assertIn(menu["id"], first["states"][key]["conditional_operations"])
 
     def test_window_mode_requires_matching_inverse_in_the_same_menu(self):
-        old = operation("menu", "menuitem", "切换至迷你模式", ["窗口"])
+        old = operation("menu", "menuitem", "显示工具栏", ["窗口"])
         f = Frame("")
-        f.add(operation("menu", "menuitem", "切换至完整模式", ["其他"]))
+        f.add(operation("menu", "menuitem", "隐藏工具栏", ["其他"]))
         self.assertFalse(window_mode_changed(old, f))
-        f.add(operation("menu", "menuitem", "切换至完整模式", ["窗口"]))
+        f.add(operation("menu", "menuitem", "隐藏工具栏", ["窗口"]))
         self.assertTrue(window_mode_changed(old, f))
         f.add(old)
         self.assertFalse(window_mode_changed(old, f))
@@ -90,10 +90,10 @@ class NavigationStateTests(unittest.TestCase):
         if not find_spec("openadapt_flow"):
             self.skipTest("optional desktop backend")
         window = Mock()
-        earlier = visual.ChoiceGroup({}, "推荐", 8)
+        earlier = visual.ChoiceGroup({}, "概览", 8)
         with patch.object(visual, "window_info", return_value=Mock(window_id=9)):
             with self.assertRaisesRegex(ValueError, "window changed"):
-                visual.select(window, earlier, "播客", {"role":"visual-sidebar"})
+                visual.select(window, earlier, "面板", {"role":"visual-sidebar"})
         window.client.activate.assert_not_called()
 
 
@@ -112,13 +112,13 @@ class VisualDetectionTests(unittest.TestCase):
 
     def test_sidebar_needs_one_highlight_and_recovers_labels_with_icons(self):
         labels = [visual.Label(s, 40, 95, 100+i*40, 20)
-                  for i,s in enumerate(["推荐", "n 精选", "（（o））播客", "∞ 漫游", "• 关注●"])]
+                  for i,s in enumerate(["概览", "n 详情", "（（o））面板", "∞ 属性", "• 其他●"])]
         with patch.object(visual, "recognize", return_value=labels):
             self.assertIsNone(visual.detect(self.frame([]), 9))
             second = (12,126,164,154)
             group = visual.detect(self.frame([second]), 9)
-            self.assertEqual(group.selected, "精选")
-            self.assertEqual(list(group.labels), ["推荐", "精选", "播客", "漫游", "关注"])
+            self.assertEqual(group.selected, "详情")
+            self.assertEqual(list(group.labels), ["概览", "详情", "面板", "属性", "其他"])
             # Two highlighted destinations cannot establish a selected row.
             both = self.frame([second, (12,166,164,194)])
             candidate = visual.detect(both, 9)
@@ -126,7 +126,7 @@ class VisualDetectionTests(unittest.TestCase):
 
     def test_page_tabs_require_unique_underline_and_retain_window_coordinates(self):
         labels = [visual.Label(s, 15+i*80, 65+i*80, 28, 20)
-                  for i,s in enumerate(["精选", "歌单广场", "排行榜", "歌手"])]
+                  for i,s in enumerate(["详情", "属性", "设置", "选项"])]
         x0, y0 = 210, 72
         def bar(n):
             return (x0+30+n*80, y0+42, x0+51+n*80, y0+45)
@@ -134,6 +134,6 @@ class VisualDetectionTests(unittest.TestCase):
         with patch.object(visual, "recognize", return_value=labels):
             self.assertIsNone(visual.detect_tabs(self.frame([]), 4))
             group = visual.detect_tabs(self.frame([bar(2)]), 4)
-            self.assertEqual(group.selected, "排行榜")
-            self.assertEqual(group.labels["排行榜"].left, x0+175)
+            self.assertEqual(group.selected, "设置")
+            self.assertEqual(group.labels["设置"].left, x0+175)
             self.assertIsNone(visual.detect_tabs(self.frame([bar(1),bar(2)]), 4))

@@ -5,13 +5,12 @@ import time
 
 from macos_openadapt import AdapterError, attribute, connect
 
-from .catalog import CatalogError, Frame, WINDOW_MODES, inverse_name, navigation_id, operation
+from .catalog import CatalogError, Frame, inverse_name, navigation_id, operation
 from .surfaces import Node, extract
 from . import visual
 
 
 VIEW_MODES = (
-    {"basic", "scientific", "programmer", "基础", "科学", "程序员", "基本", "工程"},
     {"icons", "as icons", "list", "as list", "columns", "as columns", "gallery", "as gallery", "grid",
      "图标", "列表", "分栏", "画廊", "网格", "圖像", "列表顯示", "直欄", "圖庫"},
 )
@@ -262,8 +261,7 @@ class NativeDriver:
         bar = attribute(self.app_element, "AXMenuBar")
         if bar is not None:
             menus(frame, bar, self.notes)
-        if opaque and (any(op["role"] == "visual-sidebar" or op["name"].casefold() in WINDOW_MODES
-                           for op in frame.ops.values())):
+        if opaque:
             frame.conditional.update(key for key, op in frame.ops.items() if conditional_menu(op))
         return frame
 
@@ -284,7 +282,7 @@ class NativeDriver:
             return
         if op["kind"] == "menu":
             press_menu(self.window, self.app_element, op)
-            self.pending_window_mode = op if op["name"].casefold() in WINDOW_MODES else None
+            self.pending_window_mode = op if inverse_name(op["name"]) else None
             return
         elif op["kind"] == "field":
             if not settable(ref.native):

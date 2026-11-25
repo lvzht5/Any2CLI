@@ -100,8 +100,6 @@ def import_trace(app, trace):
         for item in [*trace.get("common", []), *state["controls"]]:
             if not isinstance(item, dict):
                 raise CatalogError("Expected a trace control object.")
-            if item.get("kind") in {"algorithm", "library-read"}:
-                raise CatalogError("Service operations must be discovered from the installed provider.")
             op = operation(item["kind"], item["role"], item["name"], item.get("scope", []),
                            options=item.get("options", []), help_text=item.get("help", ""))
             selected = item.get("selected")

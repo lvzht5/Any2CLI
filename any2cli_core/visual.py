@@ -13,9 +13,8 @@ from .catalog import CatalogError, operation
 
 # Only recognizable navigation destinations participate in automatic probing.
 # Other choices in the same confirmed group remain explicitly addressable.
-NAVIGATION = {"home", "browse", "discover", "featured", "podcasts", "overview", "library", "recommended", "charts",
-              "playlists", "首页", "浏览", "发现", "精选", "播客", "概览", "资料库", "推荐", "歌单广场",
-              "排行榜", "歌单", "歌手", "首頁", "瀏覽", "精選", "推薦"}
+NAVIGATION = {"home", "overview", "browse", "settings", "details", "首页", "概览", "浏览", "设置", "详情",
+              "首頁", "概覽", "瀏覽", "設定", "詳情"}
 
 
 @dataclass(frozen=True)

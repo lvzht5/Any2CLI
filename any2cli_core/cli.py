@@ -5,22 +5,18 @@ import hashlib
 import json
 import math
 import os
-import re
 import shlex
 import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-from macos_openadapt import AdapterError
-
-from . import music, qgis
+from .drivers import AdapterError, open_driver
 from .applications import resolve_application
-from .catalog import (CatalogError, SERVICE_KINDS, describe, empty_catalog, initial_commands, merge_catalog,
+from .catalog import (CatalogError, describe, empty_catalog, initial_commands, merge_catalog,
                       register, resolve, search)
 from .engine import execute, explore_live, input_value
 from .importers import import_graph, import_trace
-from .native import NativeDriver
 from .store import Store, live_session, profile_path
 
 
@@ -43,62 +39,37 @@ def seconds(text):
 
 def run_flags(parser, op=None):
     kind = op["kind"] if op else None
-    named = {}
-    if kind == "algorithm":
-        for key, spec in op.get("parameters", {}).get("properties", {}).items():
-            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key):
-                continue
-            flag = "--" + key.lower().replace("_", "-")
-            while flag in {"--value", "--help", "--dry-run", "--replay"} or flag in named.values():
-                flag = "--param-" + flag[2:]
-            named[key] = flag
-            parser.add_argument(flag, dest="param_" + key, action="append", metavar=key,
-                                help=(spec.get("title") or key).replace("%", "%%"))
-    parser.set_defaults(named_parameters=list(named))
-    if kind is None or kind in {"field", "choice", "expand", "toggle", "algorithm"}:
+    if kind is None or kind in {"field", "choice", "expand", "toggle"}:
         choices = op.get("options") if op else None
         if kind in {"expand", "toggle"}:
             choices = ["true", "false"]
-        help_text = "JSON object of QGIS Processing inputs" if kind == "algorithm" else "Operation argument"
-        if kind == "algorithm":
-            if op.get("parameters"):
-                help_text += " (" + ", ".join(op["parameters"]["properties"]) + ")"
-            else:
-                help_text += ". Use any2cli convert to cache the named parameters."
-        parser.add_argument("--value", required=op is not None and kind != "algorithm",
-                            choices=choices, help=help_text.replace("%", "%%"))
+        parser.add_argument("--value", required=op is not None, choices=choices, help="Operation argument")
     parser.set_defaults(value=None)
     modes = parser.add_mutually_exclusive_group()
-    plan_help = "Plan the call without opening the provider" if kind in SERVICE_KINDS else "Print the saved route without opening the app"
-    modes.add_argument("--dry-run", action="store_true", help=plan_help)
+    modes.add_argument("--dry-run", action="store_true", help="Print the saved route without opening the app")
     modes.add_argument("--replay", action="store_true", help="Use only transitions in the recording")
-    if kind in SERVICE_KINDS:
-        parser.set_defaults(from_state=None, window=None, settle=None)
-        return
     parser.add_argument("--from-state", help="Starting state for a plan or recorded replay")
-    parser.add_argument("--window", help="Exact native window title")
+    parser.add_argument("--window", help="Exact window title")
     modes.add_argument("--foreground", action="store_true",
-                       help="Allow menus and physical clicks while the target window already has focus")
+                       help="On macOS, allow menus and physical clicks while the target window already has focus")
     parser.add_argument("--settle", type=seconds, default=5.0, help="Seconds to wait for a UI postcondition")
 
 
 def add_commands(commands):
-    p = commands.add_parser("explore", help="Explore an installed macOS app or import an exploration recording")
-    p.add_argument("app", help="Bundle ID, installed name or .app directory")
+    p = commands.add_parser("explore", help="Explore a desktop window or import an exploration recording")
+    p.add_argument("app", help="macOS bundle ID, app name or .app path, or Windows executable name or path")
     source = p.add_mutually_exclusive_group()
     source.add_argument("--graph", type=Path, help="GUIrilla graph/data.json")
     source.add_argument("--trace", type=Path, help="Observed any2cli.trace.v1 JSON")
-    source.add_argument("--processing", action="store_true", help="Index QGIS native algorithms without opening a window")
-    source.add_argument("--library", action="store_true", help="Index the public Apple Music library operations")
     p.add_argument("--profile", type=Path, help="Destination profile (default .any2cli/<bundle>.json)")
     p.add_argument("--primary", type=integer, help="Initial command count (automatic by default, normally 4–12)")
     p.add_argument("--steps", type=integer, help="Maximum forward probes (default: observe only, or one with --follow or --foreground)")
     p.add_argument("--foreground", action="store_true",
-                   help="Allow foreground-only probes while the target window already has focus")
+                   help="On macOS, allow foreground-only probes while the target window already has focus")
     p.add_argument("--depth", type=integer, default=2, help="Maximum nested navigation depth")
     p.add_argument("--follow", action="append", default=[], help="Probe a button, menu, readable switch or selector=value (repeatable)")
     p.add_argument("--settle", type=seconds, default=5.0)
-    p.add_argument("--window", help="Exact native window title")
+    p.add_argument("--window", help="Exact window title")
     for name, help_text in [("tree", "Inspect the observed operation tree"), ("commands", "List generated commands"),
                             ("find", "Search the whole operation tree"), ("convert", "Compile an operation on demand"),
                             ("run", "Resolve, compile and run an operation"), ("app", "Open a generated app CLI")]:
@@ -120,7 +91,17 @@ def wrapper_text(interpreter, module, profile_name):
             shlex.quote(module) + ' app "$(dirname "$0")/$profile_name" "$@"\n')
 
 
+def windows_wrapper(json_suffix):
+    profile = "%~dpn0.json" if json_suffix else "%~dpn0"
+    return ("@echo off\r\n@rem Generated by Any2CLI\r\nsetlocal DisableDelayedExpansion\r\n"
+            'for %%I in (any2cli.exe) do set "launcher=%%~$PATH:I"\r\n'
+            'if not defined launcher (\r\n  echo Activate the environment containing any2cli.exe. 1>&2\r\n'
+            '  exit /b 2\r\n)\r\n"%launcher%" app "' + profile + '" %*\r\nexit /b %errorlevel%\r\n')
+
+
 def generated_wrapper(content):
+    if content in (windows_wrapper(True), windows_wrapper(False)):
+        return True
     try:
         words = shlex.split(content, comments=True)
     except ValueError:
@@ -132,24 +113,28 @@ def generated_wrapper(content):
 def wrapper(path):
     import any2cli
 
-    if os.name == "nt":
-        return None
     path = path.absolute()
-    target = path.with_name(path.name + ".cli") if path.suffix != ".json" else path.with_suffix(".cli")
-    body = wrapper_text(sys.executable, str(Path(any2cli.__file__).resolve()), path.name)
+    extension = ".cmd" if os.name == "nt" else ".cli"
+    json_suffix = path.suffix == ".json"
+    target = path.with_suffix(extension) if json_suffix else path.with_name(path.name + extension)
+    body = (windows_wrapper(json_suffix) if os.name == "nt" else
+            wrapper_text(sys.executable, str(Path(any2cli.__file__).resolve()), path.name))
     with tempfile.TemporaryDirectory(dir=path.parent) as folder:
         tmp = Path(folder) / "launcher"
-        tmp.write_text(body, encoding="utf-8")
+        tmp.write_bytes(body.encode("utf-8"))
         tmp.chmod(0o700)
         try:
-            os.link(tmp, target)
+            if os.name == "nt":
+                os.rename(tmp, target)  # On Windows rename fails if the target exists.
+            else:
+                os.link(tmp, target)
         except FileExistsError:
             if target.is_symlink() or not target.is_file():
                 return None
             with target.open("rb") as stream:
                 existing = stream.read(65537)
                 previous = os.fstat(stream.fileno())
-            if existing == body.encode() and os.access(target, os.X_OK):
+            if existing == body.encode() and (os.name == "nt" or os.access(target, os.X_OK)):
                 return str(target)
             try:
                 managed = len(existing) <= 65536 and generated_wrapper(existing.decode("utf-8"))
@@ -186,54 +171,21 @@ def text_tree(cat):
                 continue
             seen.add(key)
             out.append(f"{prefix}{label} [{key}]")
-            groups = defaultdict(list)
             for oid in cat["states"][key]["operations"]:
                 op = cat["operations"][oid]
                 qualified = " / ".join([*op["scope"], op["name"]]).replace("\n", " ")
                 cli = f", CLI {compiled[oid]}" if oid in compiled else ""
-                if op["kind"] == "algorithm":
-                    groups[op.get("group", "native")].append(f"{op['name']} ({oid}{cli})")
-                else:
-                    out.append(f"{indent}   · {qualified} ({op['kind']}, {oid}{cli})")
-            for group, entries in sorted(groups.items()):
-                out.append(f"{indent}   {group}")
-                out.extend(f"{indent}      · {entry}" for entry in sorted(entries))
+                out.append(f"{indent}   · {qualified} ({op['kind']}, {oid}{cli})")
             for name, child in reversed(sorted(edges[key])):
                 stack.append((child, indent + "   ", name.replace("\n", " ")))
     return "\n".join(out)
 
 
 def explore_installed(app, path, args):
-    if args.processing:
-        return qgis.discover(app, path)
-    if getattr(args, "library", False):
-        return music.discover(app, path)
-    provider = {music.APP: music, qgis.APP: qgis}.get(app)
-    try:
-        with live_session(app):
-            foreground = getattr(args, "foreground", False)
-            driver = NativeDriver.open(app, args.window, app_path=path, foreground=foreground)
-            steps = args.steps if args.steps is not None else int(bool(foreground or args.follow))
-            catalog, report = explore_live(app, driver, steps=steps, depth=args.depth, timeout=args.settle,
-                                           follow=args.follow)
-    except AdapterError as exc:
-        if provider is None or exc.report["status"] not in {"permission_required", "unavailable"}:
-            raise
-        try:
-            catalog, report = provider.discover(app, path)
-        except CatalogError:
-            raise exc
-        report["issues"] = [exc.report]
-        return catalog, report
-    if provider is not None:
-        try:
-            service, count = provider.discover(app, path)
-        except CatalogError as exc:
-            report["issues"].append(exc.report)
-        else:
-            merge_catalog(catalog, service)
-            report.update(count)
-    return catalog, report
+    with live_session(app):
+        driver = open_driver(app, args.window, app_path=path, foreground=args.foreground)
+        steps = args.steps if args.steps is not None else int(bool(args.foreground or args.follow))
+        return explore_live(app, driver, steps=steps, depth=args.depth, timeout=args.settle, follow=args.follow)
 
 
 def explore(args):
@@ -243,8 +195,8 @@ def explore(args):
     if previous and previous["application"] != app:
         raise CatalogError("This profile belongs to a different application.")
     if exact_path and previous.get("app_path", exact_path) != exact_path:
-        raise CatalogError("This profile is bound to a different installed .app path.")
-    if args.follow and (args.graph or args.trace or args.processing or args.library):
+        raise CatalogError("This profile is bound to a different application path.")
+    if args.follow and (args.graph or args.trace):
         raise CatalogError("--follow requires live GUI exploration.")
     if args.graph or args.trace:
         file = args.graph or args.trace
@@ -258,8 +210,6 @@ def explore(args):
             edge["recording"] = source_id
     else:
         path = exact_path or previous.get("app_path")
-        if app == qgis.APP and path and not exact_path:
-            path, _ = qgis.profile_installation(previous)
         incoming, report = explore_installed(app, path, args)
     if exact_path:
         incoming["app_path"] = exact_path
@@ -267,14 +217,6 @@ def explore(args):
     def save(cat):
         merge_catalog(cat, incoming)
         primary = initial_commands(cat, args.primary)
-        if "qgis-process" in incoming["sources"]:
-            for name in primary:
-                op = cat["operations"][cat["commands"][name]]
-                if op["kind"] == "algorithm":
-                    try:
-                        qgis.prepare_parameters(cat, op, discovered_path=incoming["app_path"])
-                    except CatalogError as exc:
-                        report.setdefault("issues", []).append({**exc.report, "command": name})
         return {"states": len(cat["states"]), "transitions": len(cat["transitions"]),
                 "operations": len(cat["operations"]), "commands": len(cat["commands"]),
                 "primary_commands": primary, "root": cat["root"]}
@@ -285,12 +227,10 @@ def explore(args):
             **totals, "exploration": report}
 
 
-def compile_query(store, query, *, validate=None, load_parameters=False):
+def compile_query(store, query, *, validate=None):
     def convert(cat):
         key = resolve(cat, query)
         op = cat["operations"][key]
-        if load_parameters and op["kind"] == "algorithm":
-            qgis.prepare_parameters(cat, op)
         if validate:
             validate(op)
         created = key not in cat["commands"].values()
@@ -302,43 +242,20 @@ def compile_query(store, query, *, validate=None, load_parameters=False):
 
 def run_command(store, args):
     offline = args.dry_run or args.replay
-    named = {}
-    for key in getattr(args, "named_parameters", []):
-        values = getattr(args, "param_" + key, None)
-        if values is not None:
-            named[key] = values[0] if len(values) == 1 else values
-    if named and args.value is not None:
-        raise CatalogError("Choose either named parameters or --value JSON for a call.", status="invalid_input")
-    if getattr(args, "named_parameters", []) and args.value is None:
-        args.value = json.dumps(named, ensure_ascii=False)
     if args.from_state and not offline:
         raise CatalogError("--from-state is available for recorded replay and dry runs.")
 
     def validate(item):
-        if item["kind"] in SERVICE_KINDS and (args.window or args.from_state):
-            raise CatalogError("This operation runs independently of GUI state.", status="invalid_input")
-        if args.dry_run and item["kind"] == "algorithm" and "parameters" not in item:
-            raise CatalogError("Cache the installed parameter contract with any2cli convert before planning.",
-                               status="parameters_unavailable")
         input_value(item, args.value)
 
-    op, created = compile_query(store, args.query, validate=validate, load_parameters=not offline)
+    op, created = compile_query(store, args.query, validate=validate)
     cat = store.read()
-    if op["kind"] in SERVICE_KINDS:
-        if offline:
-            result = {"target": op["name"], "mode": "plan" if args.dry_run else "recording",
-                      "status": "planned" if args.dry_run else "not_recorded", "route": [], "backend": op["role"]}
-        elif op["kind"] == "library-read":
-            result = music.run(cat, op["name"])
-        else:
-            result = qgis.run(cat, op["name"], input_value(op, args.value))
-        result["operation"] = op["id"]
-    elif offline:
+    if offline:
         result = execute(cat, op["id"], args.value, start=args.from_state, dry_run=args.dry_run)
     else:
         with live_session(cat["application"]):
-            driver = NativeDriver.open(cat["application"], args.window, app_path=cat.get("app_path"),
-                                       foreground=args.foreground)
+            driver = open_driver(cat["application"], args.window, app_path=cat.get("app_path"),
+                                 foreground=args.foreground)
             try:
                 result = execute(cat, op["id"], args.value, driver=driver, timeout=args.settle)
             finally:
@@ -353,7 +270,7 @@ def dispatch(args):
     if args.command == "run":
         return run_command(store, args)
     if args.command == "convert":
-        op, created = compile_query(store, args.query, load_parameters=True)
+        op, created = compile_query(store, args.query)
         return {"status": "converted", "newly_compiled": created, **op}
     cat = store.read()
     if args.command == "tree":
@@ -387,22 +304,7 @@ def app_cli(profile, argv):
     parser = app_parser(store.path, cat, query, selected)
     if not argv:
         return parser.format_help().rstrip()
-    # argparse handles help entirely from the profile. Only a live call using
-    # uncached provider-specific flags needs a second pass.
-    args, extra = parser.parse_known_args(argv)
-    if extra and selected and selected["kind"] == "algorithm" and "parameters" not in selected:
-        if args.dry_run or args.replay:
-            raise CatalogError("Use any2cli convert to cache named parameters for offline calls.",
-                               status="parameters_unavailable")
-        def load_signature(current):
-            op = current["operations"][selected["id"]]
-            qgis.prepare_parameters(current, op)
-            return op
-        selected = store.update(load_signature)
-        cat["operations"][selected["id"]] = selected
-        parser = app_parser(store.path, cat, query, selected)
-    if extra:
-        args = parser.parse_args(argv)
+    args = parser.parse_args(argv)
     return run_command(store, args)
 
 

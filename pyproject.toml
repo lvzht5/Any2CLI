@@ -12,7 +12,8 @@ license = "MIT"
 license-files = ["LICENSE"]
 
 [project.optional-dependencies]
-macos = ["openadapt-flow[macos]==3.4.0"]
+macos = ["openadapt-flow[macos]==3.4.0; sys_platform == 'darwin'"]
+windows = ["uiautomation==2.0.29; sys_platform == 'win32'"]
 
 [project.urls]
 Repository = "https://github.com/lvzht5/Any2CLI"
@@ -21,11 +22,8 @@ Repository = "https://github.com/lvzht5/Any2CLI"
 any2cli = "any2cli:main"
 
 [tool.setuptools]
-py-modules = ["any2cli", "stocks_adapter", "macos_openadapt"]
-packages = ["any2cli_core", "adapters"]
-
-[tool.setuptools.package-data]
-adapters = ["stocks-1m.json"]
+py-modules = ["any2cli", "macos_openadapt"]
+packages = ["any2cli_core"]
 
 [tool.setuptools.dynamic]
 version = {attr = "any2cli.__version__"}
