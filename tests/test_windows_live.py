@@ -78,6 +78,7 @@ class WindowsDesktopTests(unittest.TestCase):
             script = """
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework
+[Windows.Media.RenderOptions]::ProcessRenderMode = [Windows.Interop.RenderMode]::SoftwareOnly
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -100,18 +101,30 @@ $window.FindName('Apply').Add_Click({
   $window.FindName('Output').Text = $window.FindName('Query').Text
   $window.FindName('Flag').IsChecked = $false
 })
-$window.Add_ContentRendered({[IO.File]::WriteAllText((Join-Path (Get-Location) 'ready'), '1')})
-[void]$window.ShowDialog()
+$window.Show()
+[Windows.Threading.Dispatcher]::Run()
 """.replace("WINDOW_TITLE", title)
-            process = subprocess.Popen([shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-STA", "-Command", script],
+            script_file = Path(folder) / "window.ps1"
+            script_file.write_text(script, encoding="utf-8-sig")
+            process = subprocess.Popen([shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-STA", "-File", str(script_file)],
                                        cwd=folder, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
-                deadline = time.monotonic() + 30
-                while not (Path(folder) / "ready").is_file():
+                # The UIA tree can be ready even when a hosted desktop never
+                # raises WPF's ContentRendered event. Wait for the actual controls.
+                deadline = time.monotonic() + 60
+                while True:
                     if process.poll() is not None:
                         self.fail(process.stderr.read().decode(errors="replace"))
-                    self.assertLess(time.monotonic(), deadline, "WPF did not open in this desktop session")
-                    time.sleep(0.1)
+                    try:
+                        frame = WindowsDriver.open(Path(shell).name, title, app_path=shell).observe()
+                        visible = {op["name"] for op in frame.ops.values()}
+                        if {"Pages", "Query", "Apply"} <= visible:
+                            break
+                        detail = sorted(visible)
+                    except CatalogError as exc:
+                        detail = exc.report
+                    self.assertLess(time.monotonic(), deadline, f"WPF UI Automation readiness: {detail}")
+                    time.sleep(0.25)
 
                 def check(*args, launcher=None):
                     result = call_cli(*args, cwd=folder, launcher=launcher)
