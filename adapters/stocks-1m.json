@@ -1,0 +1,13 @@
+{
+  "control": {
+    "role": "AXScrollArea",
+    "name": "Reporting period"
+  },
+  "target": {
+    "role": "button",
+    "name": "1 month"
+  },
+  "evidence": [
+    "#/edges/2/out_vertice/edges/0/out_vertice/edges/0/out_vertice/edges/0/out_vertice/edges/2/out_vertice/edges/3"
+  ]
+}
